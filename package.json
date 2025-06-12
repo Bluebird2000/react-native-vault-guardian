@@ -16,5 +16,9 @@
     "url": "https://github.com/Bluebird2000/react-native-vault-guardian/issues"
   },
   "homepage": "https://github.com/Bluebird2000/react-native-vault-guardian#readme",
-  "description": ""
+  "description": "",
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-native": "^0.80.0"
+  }
 }
