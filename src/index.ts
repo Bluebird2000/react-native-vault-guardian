@@ -33,7 +33,10 @@ const checkIfJailBrokenOrRooted = (): boolean => {
 };
 
 const checkDebugger = (): boolean => {
-  return Boolean(global?.__REACT_DEVTOOLS_GLOBAL_HOOK__);
+  return Boolean(
+    (global as typeof globalThis & { __REACT_DEVTOOLS_GLOBAL_HOOK__?: unknown })
+      .__REACT_DEVTOOLS_GLOBAL_HOOK__
+  );
 };
 
 const checkTimeTampering = (): boolean => {
