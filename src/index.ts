@@ -4,9 +4,10 @@ import {
   AppStateStatus,
   Platform,
   NativeModules,
+  LogBox,
 } from "react-native";
 
-export type VaultGuardianStatus = {
+type VaultGuardianStatus = {
   isEmulator: boolean;
   isJailBrokenOrRooted: boolean;
   isDebuggerConnected: boolean;
@@ -14,14 +15,55 @@ export type VaultGuardianStatus = {
   isTimeTampered: boolean;
 };
 
+type BuildProps = {
+  brand?: string;
+  device?: string;
+  fingerprint?: string;
+  hardware?: string;
+  model?: string;
+  product?: string;
+};
+
 const isAndroid = Platform.OS === "android";
 const isIOS = Platform.OS === "ios";
+const NATIVE_TIMEOUT = 3000; // milliseconds
 
-const checkIfEmulator = (): boolean => {
+LogBox.ignoreLogs(["[VaultGuardian]"]);
+
+const log = (label: string, data: unknown) => {
+  if (__DEV__) console.log(`[VaultGuardian] ${label}:`, data);
+};
+
+const withTimeout = async <T>(
+  promise: Promise<T>,
+  label = ""
+): Promise<T | null> => {
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) =>
+        setTimeout(() => {
+          log(`${label} timeout`, null);
+          resolve(null);
+        }, NATIVE_TIMEOUT)
+      ),
+    ]);
+  } catch (error) {
+    log(`${label} failed`, error);
+    return null;
+  }
+};
+
+const checkIfEmulator = async (): Promise<boolean> => {
   try {
     if (isAndroid) {
-      const buildProps =
-        NativeModules?.DeviceInfoModule?.getBuildProps?.() || {};
+      const props = await withTimeout(
+        NativeModules?.DeviceInfoModule?.getBuildProps?.() as Promise<BuildProps>,
+        "Android Emulator Check"
+      );
+
+      if (!props) return false;
+
       const {
         brand = "",
         device = "",
@@ -29,70 +71,80 @@ const checkIfEmulator = (): boolean => {
         hardware = "",
         model = "",
         product = "",
-      } = buildProps;
+      } = props;
 
-      return /generic|sdk|emulator|x86|goldfish|ranchu/i.test(
-        `${brand}${device}${fingerprint}${hardware}${model}${product}`
-      );
+      const combined = `${brand}${device}${fingerprint}${hardware}${model}${product}`;
+      return /generic|sdk|emulator|x86|goldfish|ranchu/i.test(combined);
     }
 
     if (isIOS) {
-      const model = NativeModules?.DeviceInfoModule?.model || "";
+      const model =
+        (await withTimeout(
+          Promise.resolve(NativeModules?.DeviceInfoModule?.model),
+          "iOS Emulator Check"
+        )) || "";
       return /simulator|x86_64|i386/i.test(model);
     }
   } catch (e) {
-    console.warn("Emulator check failed:", e);
+    log("Emulator check failed", e);
   }
 
   return false;
 };
 
-const checkIfJailBrokenOrRooted = (): boolean => {
+const checkIfJailBrokenOrRooted = async (): Promise<boolean> => {
   try {
     const fs = NativeModules?.FileSystemModule;
 
-    return (
-      fs?.checkRootAccess?.() ||
-      fs?.checkJailBreakPaths?.() ||
-      fs?.canExecuteSU?.() ||
-      false
-    );
+    const [rootAccess, jailbreakPaths, suAccess] = await Promise.all([
+      withTimeout(fs?.checkRootAccess?.(), "Root Access"),
+      withTimeout(fs?.checkJailBreakPaths?.(), "Jailbreak Paths"),
+      withTimeout(fs?.canExecuteSU?.(), "SU Binary"),
+    ]);
+
+    return !!(rootAccess || jailbreakPaths || suAccess);
   } catch (e) {
-    console.warn("Jailbreak/root detection failed:", e);
+    log("Root/Jailbreak check failed", e);
     return false;
   }
 };
 
-const checkDebugger = (): boolean => {
+const checkDebugger = async (): Promise<boolean> => {
   try {
-    const devToolsHook = (global as any).__REACT_DEVTOOLS_GLOBAL_HOOK__;
-    if (devToolsHook) return true;
+    if ((global as any).__REACT_DEVTOOLS_GLOBAL_HOOK__) return true;
 
-    const nativeCheck = NativeModules?.DebuggerModule?.isDebuggerConnected?.();
+    const nativeCheck = await withTimeout(
+      NativeModules?.DebuggerModule?.isDebuggerConnected?.(),
+      "Debugger Check"
+    );
     return !!nativeCheck;
   } catch (e) {
-    console.warn("Debugger check failed:", e);
+    log("Debugger check failed", e);
     return false;
   }
 };
 
-// Improved Time Tampering Detection
-const checkTimeTampering = (): boolean => {
+const checkTimeTampering = async (): Promise<boolean> => {
   try {
-    const now = new Date();
-    const year = now.getFullYear();
+    const now = Date.now();
+    const date = new Date(now);
+    const year = date.getFullYear();
 
     if (year < 2015 || year > 2100) return true;
 
-    // Optional: Trust secure native time module
-    const nativeTime = NativeModules?.SecureTimeModule?.getSecureTime?.();
-    if (nativeTime && Math.abs(now.getTime() - nativeTime) > 5 * 60 * 1000) {
-      return true;
+    const secureTime = await withTimeout(
+      NativeModules?.SecureTimeModule?.getSecureTime?.(),
+      "Secure Time"
+    );
+
+    if (secureTime) {
+      const delta = Math.abs(now - Number(secureTime));
+      if (delta > 5 * 60 * 1000) return true;
     }
 
     return false;
   } catch (e) {
-    console.warn("Time tampering check failed:", e);
+    log("Time tampering detection failed", e);
     return false;
   }
 };
@@ -102,34 +154,43 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
     isEmulator: false,
     isJailBrokenOrRooted: false,
     isDebuggerConnected: false,
-    isAppInBackground: false,
+    isAppInBackground: AppState.currentState !== "active",
     isTimeTampered: false,
   });
 
   useEffect(() => {
+    let isMounted = true;
+
     const performChecks = async () => {
       const results: VaultGuardianStatus = {
-        isEmulator: checkIfEmulator(),
-        isJailBrokenOrRooted: checkIfJailBrokenOrRooted(),
-        isDebuggerConnected: checkDebugger(),
+        isEmulator: await checkIfEmulator(),
+        isJailBrokenOrRooted: await checkIfJailBrokenOrRooted(),
+        isDebuggerConnected: await checkDebugger(),
         isAppInBackground: AppState.currentState !== "active",
-        isTimeTampered: checkTimeTampering(),
+        isTimeTampered: await checkTimeTampering(),
       };
 
-      setStatus(results);
-    };
-
-    const appStateListener = (nextAppState: AppStateStatus) => {
-      setStatus((prev) => ({
-        ...prev,
-        isAppInBackground: nextAppState !== "active",
-      }));
+      if (isMounted) {
+        setStatus(results);
+      }
     };
 
     performChecks();
 
-    const subscription = AppState.addEventListener("change", appStateListener);
-    return () => subscription.remove();
+    const subscription = AppState.addEventListener(
+      "change",
+      (nextAppState: AppStateStatus) => {
+        setStatus((prev) => ({
+          ...prev,
+          isAppInBackground: nextAppState !== "active",
+        }));
+      }
+    );
+
+    return () => {
+      isMounted = false;
+      subscription.remove();
+    };
   }, []);
 
   return status;
