@@ -149,6 +149,20 @@ const checkTimeTampering = async (): Promise<boolean> => {
   }
 };
 
+// Future-proof anti-hooking/anti-frida placeholder
+const checkRuntimeIntegrity = async (): Promise<boolean> => {
+  try {
+    const nativeCheck = await withTimeout(
+      NativeModules?.RuntimeMonitorModule?.checkRuntimeIntegrity?.(),
+      "Runtime Integrity"
+    );
+    return !!nativeCheck;
+  } catch (e) {
+    log("Runtime integrity check failed", e);
+    return false;
+  }
+};
+
 export const useVaultGuardian = (): VaultGuardianStatus => {
   const [status, setStatus] = useState<VaultGuardianStatus>({
     isEmulator: false,
