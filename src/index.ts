@@ -1,7 +1,10 @@
-// src/index.ts
-
-import { useEffect, useState } from 'react';
-import { AppState, AppStateStatus, Platform, NativeModules } from 'react-native';
+import { useEffect, useState } from "react";
+import {
+  AppState,
+  AppStateStatus,
+  Platform,
+  NativeModules,
+} from "react-native";
 
 export type VaultGuardianStatus = {
   isEmulator: boolean;
@@ -11,37 +14,87 @@ export type VaultGuardianStatus = {
   isTimeTampered: boolean;
 };
 
+const isAndroid = Platform.OS === "android";
+const isIOS = Platform.OS === "ios";
+
 const checkIfEmulator = (): boolean => {
-  if (Platform.OS === 'android') {
-    const brand = (NativeModules.DeviceInfoModule?.brand || '').toLowerCase();
-    return brand === 'generic';
+  try {
+    if (isAndroid) {
+      const buildProps =
+        NativeModules?.DeviceInfoModule?.getBuildProps?.() || {};
+      const {
+        brand = "",
+        device = "",
+        fingerprint = "",
+        hardware = "",
+        model = "",
+        product = "",
+      } = buildProps;
+
+      return /generic|sdk|emulator|x86|goldfish|ranchu/i.test(
+        `${brand}${device}${fingerprint}${hardware}${model}${product}`
+      );
+    }
+
+    if (isIOS) {
+      const model = NativeModules?.DeviceInfoModule?.model || "";
+      return /simulator|x86_64|i386/i.test(model);
+    }
+  } catch (e) {
+    console.warn("Emulator check failed:", e);
   }
-  if (Platform.OS === 'ios') {
-    const model = (NativeModules.DeviceInfoModule?.model || '').toLowerCase();
-    return model.includes('simulator');
-  }
+
   return false;
 };
 
 const checkIfJailBrokenOrRooted = (): boolean => {
   try {
-    const fs = NativeModules.FileSystemModule;
-    return fs?.checkRootAccess?.() || false;
-  } catch {
+    const fs = NativeModules?.FileSystemModule;
+
+    return (
+      fs?.checkRootAccess?.() ||
+      fs?.checkJailBreakPaths?.() ||
+      fs?.canExecuteSU?.() ||
+      false
+    );
+  } catch (e) {
+    console.warn("Jailbreak/root detection failed:", e);
     return false;
   }
 };
 
 const checkDebugger = (): boolean => {
-  return Boolean(
-    (global as typeof globalThis & { __REACT_DEVTOOLS_GLOBAL_HOOK__?: unknown })
-      .__REACT_DEVTOOLS_GLOBAL_HOOK__
-  );
+  try {
+    const devToolsHook = (global as any).__REACT_DEVTOOLS_GLOBAL_HOOK__;
+    if (devToolsHook) return true;
+
+    const nativeCheck = NativeModules?.DebuggerModule?.isDebuggerConnected?.();
+    return !!nativeCheck;
+  } catch (e) {
+    console.warn("Debugger check failed:", e);
+    return false;
+  }
 };
 
+// Improved Time Tampering Detection
 const checkTimeTampering = (): boolean => {
-  const now = new Date();
-  return now.getFullYear() < 2010 || now.getFullYear() > 2100;
+  try {
+    const now = new Date();
+    const year = now.getFullYear();
+
+    if (year < 2015 || year > 2100) return true;
+
+    // Optional: Trust secure native time module
+    const nativeTime = NativeModules?.SecureTimeModule?.getSecureTime?.();
+    if (nativeTime && Math.abs(now.getTime() - nativeTime) > 5 * 60 * 1000) {
+      return true;
+    }
+
+    return false;
+  } catch (e) {
+    console.warn("Time tampering check failed:", e);
+    return false;
+  }
 };
 
 export const useVaultGuardian = (): VaultGuardianStatus => {
@@ -54,23 +107,29 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
   });
 
   useEffect(() => {
+    const performChecks = async () => {
+      const results: VaultGuardianStatus = {
+        isEmulator: checkIfEmulator(),
+        isJailBrokenOrRooted: checkIfJailBrokenOrRooted(),
+        isDebuggerConnected: checkDebugger(),
+        isAppInBackground: AppState.currentState !== "active",
+        isTimeTampered: checkTimeTampering(),
+      };
+
+      setStatus(results);
+    };
+
     const appStateListener = (nextAppState: AppStateStatus) => {
-      setStatus(prev => ({ ...prev, isAppInBackground: nextAppState !== 'active' }));
+      setStatus((prev) => ({
+        ...prev,
+        isAppInBackground: nextAppState !== "active",
+      }));
     };
 
-    setStatus({
-      isEmulator: checkIfEmulator(),
-      isJailBrokenOrRooted: checkIfJailBrokenOrRooted(),
-      isDebuggerConnected: checkDebugger(),
-      isAppInBackground: AppState.currentState !== 'active',
-      isTimeTampered: checkTimeTampering(),
-    });
+    performChecks();
 
-    const subscription = AppState.addEventListener('change', appStateListener);
-
-    return () => {
-      subscription.remove();
-    };
+    const subscription = AppState.addEventListener("change", appStateListener);
+    return () => subscription.remove();
   }, []);
 
   return status;
