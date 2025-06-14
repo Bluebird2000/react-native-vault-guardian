@@ -13,6 +13,7 @@ type VaultGuardianStatus = {
   isDebuggerConnected: boolean;
   isAppInBackground: boolean;
   isTimeTampered: boolean;
+  isRuntimeTampered: boolean;
 };
 
 type BuildProps = {
@@ -26,7 +27,7 @@ type BuildProps = {
 
 const isAndroid = Platform.OS === "android";
 const isIOS = Platform.OS === "ios";
-const NATIVE_TIMEOUT = 3000; // milliseconds
+const NATIVE_TIMEOUT = 3000;
 
 LogBox.ignoreLogs(["[VaultGuardian]"]);
 
@@ -41,12 +42,12 @@ const withTimeout = async <T>(
   try {
     return await Promise.race([
       promise,
-      new Promise<null>((resolve) =>
+      new Promise<null>((resolve) => {
         setTimeout(() => {
           log(`${label} timeout`, null);
           resolve(null);
-        }, NATIVE_TIMEOUT)
-      ),
+        }, NATIVE_TIMEOUT);
+      }),
     ]);
   } catch (error) {
     log(`${label} failed`, error);
@@ -57,23 +58,14 @@ const withTimeout = async <T>(
 const checkIfEmulator = async (): Promise<boolean> => {
   try {
     if (isAndroid) {
-      const props = await withTimeout(
-        NativeModules?.DeviceInfoModule?.getBuildProps?.() as Promise<BuildProps>,
+      const buildProps = await withTimeout<BuildProps>(
+        NativeModules?.DeviceInfoModule?.getBuildProps?.(),
         "Android Emulator Check"
       );
 
-      if (!props) return false;
+      if (!buildProps) return false;
 
-      const {
-        brand = "",
-        device = "",
-        fingerprint = "",
-        hardware = "",
-        model = "",
-        product = "",
-      } = props;
-
-      const combined = `${brand}${device}${fingerprint}${hardware}${model}${product}`;
+      const combined = Object.values(buildProps).join("").toLowerCase();
       return /generic|sdk|emulator|x86|goldfish|ranchu/i.test(combined);
     }
 
@@ -83,7 +75,7 @@ const checkIfEmulator = async (): Promise<boolean> => {
           Promise.resolve(NativeModules?.DeviceInfoModule?.model),
           "iOS Emulator Check"
         )) || "";
-      return /simulator|x86_64|i386/i.test(model);
+      return /simulator|x86_64|i386/i.test(model.toLowerCase());
     }
   } catch (e) {
     log("Emulator check failed", e);
@@ -95,14 +87,15 @@ const checkIfEmulator = async (): Promise<boolean> => {
 const checkIfJailBrokenOrRooted = async (): Promise<boolean> => {
   try {
     const fs = NativeModules?.FileSystemModule;
+    if (!fs) return false;
 
     const [rootAccess, jailbreakPaths, suAccess] = await Promise.all([
       withTimeout(fs?.checkRootAccess?.(), "Root Access"),
       withTimeout(fs?.checkJailBreakPaths?.(), "Jailbreak Paths"),
-      withTimeout(fs?.canExecuteSU?.(), "SU Binary"),
+      withTimeout(fs?.canExecuteSU?.(), "SU Binary Access"),
     ]);
 
-    return !!(rootAccess || jailbreakPaths || suAccess);
+    return Boolean(rootAccess || jailbreakPaths || suAccess);
   } catch (e) {
     log("Root/Jailbreak check failed", e);
     return false;
@@ -127,9 +120,7 @@ const checkDebugger = async (): Promise<boolean> => {
 const checkTimeTampering = async (): Promise<boolean> => {
   try {
     const now = Date.now();
-    const date = new Date(now);
-    const year = date.getFullYear();
-
+    const year = new Date(now).getFullYear();
     if (year < 2015 || year > 2100) return true;
 
     const secureTime = await withTimeout(
@@ -139,23 +130,26 @@ const checkTimeTampering = async (): Promise<boolean> => {
 
     if (secureTime) {
       const delta = Math.abs(now - Number(secureTime));
-      if (delta > 5 * 60 * 1000) return true;
+      return delta > 5 * 60 * 1000;
     }
 
     return false;
   } catch (e) {
-    log("Time tampering detection failed", e);
+    log("Time tampering check failed", e);
     return false;
   }
 };
 
-// Future-proof anti-hooking/anti-frida placeholder
 const checkRuntimeIntegrity = async (): Promise<boolean> => {
   try {
+    const runtimeModule = NativeModules?.RuntimeMonitorModule;
+    if (!runtimeModule?.checkRuntimeIntegrity) return false;
+
     const nativeCheck = await withTimeout(
-      NativeModules?.RuntimeMonitorModule?.checkRuntimeIntegrity?.(),
+      runtimeModule.checkRuntimeIntegrity(),
       "Runtime Integrity"
     );
+
     return !!nativeCheck;
   } catch (e) {
     log("Runtime integrity check failed", e);
@@ -170,22 +164,36 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
     isDebuggerConnected: false,
     isAppInBackground: AppState.currentState !== "active",
     isTimeTampered: false,
+    isRuntimeTampered: false,
   });
 
   useEffect(() => {
     let isMounted = true;
 
     const performChecks = async () => {
-      const results: VaultGuardianStatus = {
-        isEmulator: await checkIfEmulator(),
-        isJailBrokenOrRooted: await checkIfJailBrokenOrRooted(),
-        isDebuggerConnected: await checkDebugger(),
-        isAppInBackground: AppState.currentState !== "active",
-        isTimeTampered: await checkTimeTampering(),
-      };
+      const [
+        isEmulator,
+        isJailBrokenOrRooted,
+        isDebuggerConnected,
+        isTimeTampered,
+        isRuntimeTampered,
+      ] = await Promise.all([
+        checkIfEmulator(),
+        checkIfJailBrokenOrRooted(),
+        checkDebugger(),
+        checkTimeTampering(),
+        checkRuntimeIntegrity(),
+      ]);
 
       if (isMounted) {
-        setStatus(results);
+        setStatus((prev) => ({
+          ...prev,
+          isEmulator,
+          isJailBrokenOrRooted,
+          isDebuggerConnected,
+          isTimeTampered,
+          isRuntimeTampered,
+        }));
       }
     };
 
