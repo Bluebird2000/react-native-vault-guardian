@@ -17,6 +17,7 @@ type VaultGuardianStatus = {
   isHookTampered?: boolean;
   isNetworkTampered?: boolean;
   isCertificatePinnedValid?: boolean;
+  isHardwareTampered?: boolean;
   loading: boolean;
 };
 
@@ -147,10 +148,51 @@ const checkRuntimeIntegrity = async (): Promise<boolean> => {
 const detectHookTampering = (): boolean => {
   try {
     const originalConsoleLog = console.log.toString();
-    const hasHookedConsole = !originalConsoleLog.includes("native code");
-    return hasHookedConsole;
+    return !originalConsoleLog.includes("native code");
   } catch (e) {
     log("Hook tampering check failed", e);
+    return false;
+  }
+};
+
+const checkNetworkTampering = async (): Promise<boolean> => {
+  try {
+    const networkModule = NativeModules?.NetworkTamperModule;
+    const result = await withTimeout(
+      networkModule?.detectMITMAttack?.(),
+      "Network Tampering"
+    );
+    return !!result;
+  } catch (e) {
+    log("Network tampering check failed", e);
+    return false;
+  }
+};
+
+const validateCertificatePinning = async (): Promise<boolean> => {
+  try {
+    const sslModule = NativeModules?.SSLPinningModule;
+    const result = await withTimeout(
+      sslModule?.validatePinnedCertificate?.(),
+      "Certificate Pinning"
+    );
+    return !!result;
+  } catch (e) {
+    log("Cert pinning check failed", e);
+    return false;
+  }
+};
+
+const checkHardwareTampering = async (): Promise<boolean> => {
+  try {
+    const hardwareModule = NativeModules?.HardwareModule;
+    const result = await withTimeout(
+      hardwareModule?.isTampered?.(),
+      "Hardware Tampering"
+    );
+    return !!result;
+  } catch (e) {
+    log("Hardware tampering check failed", e);
     return false;
   }
 };
@@ -164,6 +206,9 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
     isTimeTampered: false,
     isRuntimeTampered: false,
     isHookTampered: false,
+    isNetworkTampered: false,
+    isCertificatePinnedValid: true,
+    isHardwareTampered: false,
     loading: true,
   });
 
@@ -177,12 +222,18 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
         isDebuggerConnected,
         isTimeTampered,
         isRuntimeTampered,
+        isNetworkTampered,
+        isCertificatePinnedValid,
+        isHardwareTampered,
       ] = await Promise.all([
         checkIfEmulator(),
         checkIfJailBrokenOrRooted(),
         checkDebugger(),
         checkTimeTampering(),
         checkRuntimeIntegrity(),
+        checkNetworkTampering(),
+        validateCertificatePinning(),
+        checkHardwareTampering(),
       ]);
 
       const isHookTampered = detectHookTampering();
@@ -196,6 +247,9 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
           isTimeTampered,
           isRuntimeTampered,
           isHookTampered,
+          isNetworkTampered,
+          isCertificatePinnedValid,
+          isHardwareTampered,
           loading: false,
         }));
       }
