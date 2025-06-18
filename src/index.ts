@@ -14,6 +14,10 @@ type VaultGuardianStatus = {
   isAppInBackground: boolean;
   isTimeTampered: boolean;
   isRuntimeTampered: boolean;
+  isHookTampered?: boolean;
+  isNetworkTampered?: boolean;
+  isCertificatePinnedValid?: boolean;
+  loading: boolean;
 };
 
 type BuildProps = {
