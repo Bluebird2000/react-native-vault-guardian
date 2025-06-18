@@ -20,15 +20,6 @@ type VaultGuardianStatus = {
   loading: boolean;
 };
 
-type BuildProps = {
-  brand?: string;
-  device?: string;
-  fingerprint?: string;
-  hardware?: string;
-  model?: string;
-  product?: string;
-};
-
 const isAndroid = Platform.OS === "android";
 const isIOS = Platform.OS === "ios";
 const NATIVE_TIMEOUT = 3000;
@@ -62,17 +53,14 @@ const withTimeout = async <T>(
 const checkIfEmulator = async (): Promise<boolean> => {
   try {
     if (isAndroid) {
-      const buildProps = await withTimeout<BuildProps>(
+      const buildProps = await withTimeout(
         NativeModules?.DeviceInfoModule?.getBuildProps?.(),
         "Android Emulator Check"
       );
-
       if (!buildProps) return false;
-
       const combined = Object.values(buildProps).join("").toLowerCase();
       return /generic|sdk|emulator|x86|goldfish|ranchu/i.test(combined);
     }
-
     if (isIOS) {
       const model =
         (await withTimeout(
@@ -84,7 +72,6 @@ const checkIfEmulator = async (): Promise<boolean> => {
   } catch (e) {
     log("Emulator check failed", e);
   }
-
   return false;
 };
 
@@ -109,7 +96,6 @@ const checkIfJailBrokenOrRooted = async (): Promise<boolean> => {
 const checkDebugger = async (): Promise<boolean> => {
   try {
     if ((global as any).__REACT_DEVTOOLS_GLOBAL_HOOK__) return true;
-
     const nativeCheck = await withTimeout(
       NativeModules?.DebuggerModule?.isDebuggerConnected?.(),
       "Debugger Check"
@@ -136,7 +122,6 @@ const checkTimeTampering = async (): Promise<boolean> => {
       const delta = Math.abs(now - Number(secureTime));
       return delta > 5 * 60 * 1000;
     }
-
     return false;
   } catch (e) {
     log("Time tampering check failed", e);
@@ -148,12 +133,10 @@ const checkRuntimeIntegrity = async (): Promise<boolean> => {
   try {
     const runtimeModule = NativeModules?.RuntimeMonitorModule;
     if (!runtimeModule?.checkRuntimeIntegrity) return false;
-
     const nativeCheck = await withTimeout(
       runtimeModule.checkRuntimeIntegrity(),
       "Runtime Integrity"
     );
-
     return !!nativeCheck;
   } catch (e) {
     log("Runtime integrity check failed", e);
@@ -173,7 +156,7 @@ const detectHookTampering = (): boolean => {
 };
 
 export const useVaultGuardian = (): VaultGuardianStatus => {
-   const [status, setStatus] = useState<VaultGuardianStatus>({
+  const [status, setStatus] = useState<VaultGuardianStatus>({
     isEmulator: false,
     isJailBrokenOrRooted: false,
     isDebuggerConnected: false,
@@ -202,6 +185,8 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
         checkRuntimeIntegrity(),
       ]);
 
+      const isHookTampered = detectHookTampering();
+
       if (isMounted) {
         setStatus((prev) => ({
           ...prev,
@@ -210,6 +195,8 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
           isDebuggerConnected,
           isTimeTampered,
           isRuntimeTampered,
+          isHookTampered,
+          loading: false,
         }));
       }
     };
