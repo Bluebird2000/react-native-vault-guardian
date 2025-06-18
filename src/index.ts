@@ -14,15 +14,11 @@ type VaultGuardianStatus = {
   isAppInBackground: boolean;
   isTimeTampered: boolean;
   isRuntimeTampered: boolean;
-};
-
-type BuildProps = {
-  brand?: string;
-  device?: string;
-  fingerprint?: string;
-  hardware?: string;
-  model?: string;
-  product?: string;
+  isHookTampered?: boolean;
+  isNetworkTampered?: boolean;
+  isCertificatePinnedValid?: boolean;
+  isHardwareTampered?: boolean;
+  loading: boolean;
 };
 
 const isAndroid = Platform.OS === "android";
@@ -58,17 +54,14 @@ const withTimeout = async <T>(
 const checkIfEmulator = async (): Promise<boolean> => {
   try {
     if (isAndroid) {
-      const buildProps = await withTimeout<BuildProps>(
+      const buildProps = await withTimeout(
         NativeModules?.DeviceInfoModule?.getBuildProps?.(),
         "Android Emulator Check"
       );
-
       if (!buildProps) return false;
-
       const combined = Object.values(buildProps).join("").toLowerCase();
       return /generic|sdk|emulator|x86|goldfish|ranchu/i.test(combined);
     }
-
     if (isIOS) {
       const model =
         (await withTimeout(
@@ -80,7 +73,6 @@ const checkIfEmulator = async (): Promise<boolean> => {
   } catch (e) {
     log("Emulator check failed", e);
   }
-
   return false;
 };
 
@@ -105,7 +97,6 @@ const checkIfJailBrokenOrRooted = async (): Promise<boolean> => {
 const checkDebugger = async (): Promise<boolean> => {
   try {
     if ((global as any).__REACT_DEVTOOLS_GLOBAL_HOOK__) return true;
-
     const nativeCheck = await withTimeout(
       NativeModules?.DebuggerModule?.isDebuggerConnected?.(),
       "Debugger Check"
@@ -132,7 +123,6 @@ const checkTimeTampering = async (): Promise<boolean> => {
       const delta = Math.abs(now - Number(secureTime));
       return delta > 5 * 60 * 1000;
     }
-
     return false;
   } catch (e) {
     log("Time tampering check failed", e);
@@ -144,15 +134,65 @@ const checkRuntimeIntegrity = async (): Promise<boolean> => {
   try {
     const runtimeModule = NativeModules?.RuntimeMonitorModule;
     if (!runtimeModule?.checkRuntimeIntegrity) return false;
-
     const nativeCheck = await withTimeout(
       runtimeModule.checkRuntimeIntegrity(),
       "Runtime Integrity"
     );
-
     return !!nativeCheck;
   } catch (e) {
     log("Runtime integrity check failed", e);
+    return false;
+  }
+};
+
+const detectHookTampering = (): boolean => {
+  try {
+    const originalConsoleLog = console.log.toString();
+    return !originalConsoleLog.includes("native code");
+  } catch (e) {
+    log("Hook tampering check failed", e);
+    return false;
+  }
+};
+
+const checkNetworkTampering = async (): Promise<boolean> => {
+  try {
+    const networkModule = NativeModules?.NetworkTamperModule;
+    const result = await withTimeout(
+      networkModule?.detectMITMAttack?.(),
+      "Network Tampering"
+    );
+    return !!result;
+  } catch (e) {
+    log("Network tampering check failed", e);
+    return false;
+  }
+};
+
+const validateCertificatePinning = async (): Promise<boolean> => {
+  try {
+    const sslModule = NativeModules?.SSLPinningModule;
+    const result = await withTimeout(
+      sslModule?.validatePinnedCertificate?.(),
+      "Certificate Pinning"
+    );
+    return !!result;
+  } catch (e) {
+    log("Cert pinning check failed", e);
+    return false;
+  }
+};
+
+const checkHardwareTampering = async (): Promise<boolean> => {
+  try {
+    const hardwareModule = NativeModules?.HardwareModule;
+    const result = await withTimeout(
+      hardwareModule?.isTampered?.(),
+      "Hardware Tampering"
+    );
+    return !!result;
+  } catch (e) {
+    log("Hardware tampering check failed", e);
     return false;
   }
 };
@@ -165,6 +205,11 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
     isAppInBackground: AppState.currentState !== "active",
     isTimeTampered: false,
     isRuntimeTampered: false,
+    isHookTampered: false,
+    isNetworkTampered: false,
+    isCertificatePinnedValid: true,
+    isHardwareTampered: false,
+    loading: true,
   });
 
   useEffect(() => {
@@ -177,13 +222,21 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
         isDebuggerConnected,
         isTimeTampered,
         isRuntimeTampered,
+        isNetworkTampered,
+        isCertificatePinnedValid,
+        isHardwareTampered,
       ] = await Promise.all([
         checkIfEmulator(),
         checkIfJailBrokenOrRooted(),
         checkDebugger(),
         checkTimeTampering(),
         checkRuntimeIntegrity(),
+        checkNetworkTampering(),
+        validateCertificatePinning(),
+        checkHardwareTampering(),
       ]);
+
+      const isHookTampered = detectHookTampering();
 
       if (isMounted) {
         setStatus((prev) => ({
@@ -193,6 +246,11 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
           isDebuggerConnected,
           isTimeTampered,
           isRuntimeTampered,
+          isHookTampered,
+          isNetworkTampered,
+          isCertificatePinnedValid,
+          isHardwareTampered,
+          loading: false,
         }));
       }
     };
