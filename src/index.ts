@@ -161,14 +161,27 @@ const checkRuntimeIntegrity = async (): Promise<boolean> => {
   }
 };
 
+const detectHookTampering = (): boolean => {
+  try {
+    const originalConsoleLog = console.log.toString();
+    const hasHookedConsole = !originalConsoleLog.includes("native code");
+    return hasHookedConsole;
+  } catch (e) {
+    log("Hook tampering check failed", e);
+    return false;
+  }
+};
+
 export const useVaultGuardian = (): VaultGuardianStatus => {
-  const [status, setStatus] = useState<VaultGuardianStatus>({
+   const [status, setStatus] = useState<VaultGuardianStatus>({
     isEmulator: false,
     isJailBrokenOrRooted: false,
     isDebuggerConnected: false,
     isAppInBackground: AppState.currentState !== "active",
     isTimeTampered: false,
     isRuntimeTampered: false,
+    isHookTampered: false,
+    loading: true,
   });
 
   useEffect(() => {
