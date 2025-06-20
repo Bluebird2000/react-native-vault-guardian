@@ -158,6 +158,57 @@ var checkRuntimeIntegrity = () => __async(null, null, function* () {
     return false;
   }
 });
+var detectHookTampering = () => {
+  try {
+    const originalConsoleLog = console.log.toString();
+    return !originalConsoleLog.includes("native code");
+  } catch (e) {
+    log("Hook tampering check failed", e);
+    return false;
+  }
+};
+var checkNetworkTampering = () => __async(null, null, function* () {
+  var _a, _b;
+  try {
+    const networkModule = (_a = NativeModules) == null ? void 0 : _a.NetworkTamperModule;
+    const result = yield withTimeout(
+      (_b = networkModule == null ? void 0 : networkModule.detectMITMAttack) == null ? void 0 : _b.call(networkModule),
+      "Network Tampering"
+    );
+    return !!result;
+  } catch (e) {
+    log("Network tampering check failed", e);
+    return false;
+  }
+});
+var validateCertificatePinning = () => __async(null, null, function* () {
+  var _a, _b;
+  try {
+    const sslModule = (_a = NativeModules) == null ? void 0 : _a.SSLPinningModule;
+    const result = yield withTimeout(
+      (_b = sslModule == null ? void 0 : sslModule.validatePinnedCertificate) == null ? void 0 : _b.call(sslModule),
+      "Certificate Pinning"
+    );
+    return !!result;
+  } catch (e) {
+    log("Cert pinning check failed", e);
+    return false;
+  }
+});
+var checkHardwareTampering = () => __async(null, null, function* () {
+  var _a, _b;
+  try {
+    const hardwareModule = (_a = NativeModules) == null ? void 0 : _a.HardwareModule;
+    const result = yield withTimeout(
+      (_b = hardwareModule == null ? void 0 : hardwareModule.isTampered) == null ? void 0 : _b.call(hardwareModule),
+      "Hardware Tampering"
+    );
+    return !!result;
+  } catch (e) {
+    log("Hardware tampering check failed", e);
+    return false;
+  }
+});
 var useVaultGuardian = () => {
   const [status, setStatus] = useState({
     isEmulator: false,
@@ -165,7 +216,12 @@ var useVaultGuardian = () => {
     isDebuggerConnected: false,
     isAppInBackground: AppState.currentState !== "active",
     isTimeTampered: false,
-    isRuntimeTampered: false
+    isRuntimeTampered: false,
+    isHookTampered: false,
+    isNetworkTampered: false,
+    isCertificatePinnedValid: true,
+    isHardwareTampered: false,
+    loading: true
   });
   useEffect(() => {
     let isMounted = true;
@@ -175,21 +231,33 @@ var useVaultGuardian = () => {
         isJailBrokenOrRooted,
         isDebuggerConnected,
         isTimeTampered,
-        isRuntimeTampered
+        isRuntimeTampered,
+        isNetworkTampered,
+        isCertificatePinnedValid,
+        isHardwareTampered
       ] = yield Promise.all([
         checkIfEmulator(),
         checkIfJailBrokenOrRooted(),
         checkDebugger(),
         checkTimeTampering(),
-        checkRuntimeIntegrity()
+        checkRuntimeIntegrity(),
+        checkNetworkTampering(),
+        validateCertificatePinning(),
+        checkHardwareTampering()
       ]);
+      const isHookTampered = detectHookTampering();
       if (isMounted) {
         setStatus((prev) => __spreadProps(__spreadValues({}, prev), {
           isEmulator,
           isJailBrokenOrRooted,
           isDebuggerConnected,
           isTimeTampered,
-          isRuntimeTampered
+          isRuntimeTampered,
+          isHookTampered,
+          isNetworkTampered,
+          isCertificatePinnedValid,
+          isHardwareTampered,
+          loading: false
         }));
       }
     });
