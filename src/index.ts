@@ -5,6 +5,7 @@ import {
   Platform,
   NativeModules,
   LogBox,
+  Clipboard
 } from "react-native";
 
 type VaultGuardianStatus = {
@@ -18,6 +19,7 @@ type VaultGuardianStatus = {
   isNetworkTampered?: boolean;
   isCertificatePinnedValid?: boolean;
   isHardwareTampered?: boolean;
+  isClipboardSuspicious?: boolean;
   loading: boolean;
 };
 
@@ -197,6 +199,25 @@ const checkHardwareTampering = async (): Promise<boolean> => {
   }
 };
 
+const checkClipboardForSensitiveData = async (): Promise<boolean> => {
+  try {
+    const content = await Clipboard.getString();
+    if (!content) return false;
+
+    // Add patterns of sensitive data (e.g. JWT, tokens, card numbers)
+    const suspiciousPatterns = [
+      /Bearer\s+[a-zA-Z0-9-_]+\.[a-zA-Z0-9-_]+\.[a-zA-Z0-9-_]+/, // JWT
+      /\b4[0-9]{12}(?:[0-9]{3})?\b/, // Visa-like card numbers
+      /\b\d{6}\b/, // OTP
+    ];
+
+    return suspiciousPatterns.some((regex) => regex.test(content));
+  } catch (e) {
+    log("Clipboard check failed", e);
+    return false;
+  }
+};
+
 export const useVaultGuardian = (): VaultGuardianStatus => {
   const [status, setStatus] = useState<VaultGuardianStatus>({
     isEmulator: false,
@@ -234,6 +255,7 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
         checkNetworkTampering(),
         validateCertificatePinning(),
         checkHardwareTampering(),
+        checkClipboardForSensitiveData(),
       ]);
 
       const isHookTampered = detectHookTampering();
