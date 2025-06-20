@@ -5,6 +5,11 @@ type VaultGuardianStatus = {
     isAppInBackground: boolean;
     isTimeTampered: boolean;
     isRuntimeTampered: boolean;
+    isHookTampered?: boolean;
+    isNetworkTampered?: boolean;
+    isCertificatePinnedValid?: boolean;
+    isHardwareTampered?: boolean;
+    loading: boolean;
 };
 declare const useVaultGuardian: () => VaultGuardianStatus;
 
