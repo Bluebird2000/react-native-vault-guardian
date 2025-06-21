@@ -9,6 +9,7 @@ type VaultGuardianStatus = {
     isNetworkTampered?: boolean;
     isCertificatePinnedValid?: boolean;
     isHardwareTampered?: boolean;
+    isClipboardSuspicious?: boolean;
     loading: boolean;
 };
 declare const useVaultGuardian: () => VaultGuardianStatus;

@@ -44,7 +44,8 @@ import {
   AppState,
   Platform,
   NativeModules,
-  LogBox
+  LogBox,
+  Clipboard
 } from "react-native";
 var isAndroid = Platform.OS === "android";
 var isIOS = Platform.OS === "ios";
@@ -209,6 +210,24 @@ var checkHardwareTampering = () => __async(null, null, function* () {
     return false;
   }
 });
+var checkClipboardForSensitiveData = () => __async(null, null, function* () {
+  try {
+    const content = yield Clipboard.getString();
+    if (!content) return false;
+    const suspiciousPatterns = [
+      /Bearer\s+[a-zA-Z0-9-_]+\.[a-zA-Z0-9-_]+\.[a-zA-Z0-9-_]+/,
+      // JWT
+      /\b4[0-9]{12}(?:[0-9]{3})?\b/,
+      // Visa-like card numbers
+      /\b\d{6}\b/
+      // OTP
+    ];
+    return suspiciousPatterns.some((regex) => regex.test(content));
+  } catch (e) {
+    log("Clipboard check failed", e);
+    return false;
+  }
+});
 var useVaultGuardian = () => {
   const [status, setStatus] = useState({
     isEmulator: false,
@@ -243,7 +262,8 @@ var useVaultGuardian = () => {
         checkRuntimeIntegrity(),
         checkNetworkTampering(),
         validateCertificatePinning(),
-        checkHardwareTampering()
+        checkHardwareTampering(),
+        checkClipboardForSensitiveData()
       ]);
       const isHookTampered = detectHookTampering();
       if (isMounted) {
