@@ -5,7 +5,7 @@ import {
   Platform,
   NativeModules,
   LogBox,
-  Clipboard
+  Clipboard,
 } from "react-native";
 
 type VaultGuardianStatus = {
@@ -20,6 +20,8 @@ type VaultGuardianStatus = {
   isCertificatePinnedValid?: boolean;
   isHardwareTampered?: boolean;
   isClipboardSuspicious?: boolean;
+  isEnvTampered?: boolean;
+  isFridaDetected?: boolean;
   loading: boolean;
 };
 
@@ -204,16 +206,46 @@ const checkClipboardForSensitiveData = async (): Promise<boolean> => {
     const content = await Clipboard.getString();
     if (!content) return false;
 
-    // Add patterns of sensitive data (e.g. JWT, tokens, card numbers)
     const suspiciousPatterns = [
-      /Bearer\s+[a-zA-Z0-9-_]+\.[a-zA-Z0-9-_]+\.[a-zA-Z0-9-_]+/, // JWT
-      /\b4[0-9]{12}(?:[0-9]{3})?\b/, // Visa-like card numbers
-      /\b\d{6}\b/, // OTP
+      /Bearer\s+[a-zA-Z0-9-_]+\.[a-zA-Z0-9-_]+\.[a-zA-Z0-9-_]+/,
+      /\b4[0-9]{12}(?:[0-9]{3})?\b/,
+      /\b\d{6}\b/,
     ];
 
-    return suspiciousPatterns.some((regex) => regex.test(content));
+    const isSuspicious = suspiciousPatterns.some((regex) =>
+      regex.test(content)
+    );
+
+    if (isSuspicious) {
+      Clipboard.setString(""); // Clear clipboard
+    }
+
+    return isSuspicious;
   } catch (e) {
     log("Clipboard check failed", e);
+    return false;
+  }
+};
+
+const detectEnvTampering = (): boolean => {
+  try {
+    const suspiciousEnvKeys = ["NODE_OPTIONS", "LD_PRELOAD", "__REACT_DEVTOOLS_GLOBAL_HOOK__"];
+    return suspiciousEnvKeys.some((key) => typeof (global as any)[key] !== "undefined");
+  } catch (e) {
+    log("Env tampering check failed", e);
+    return false;
+  }
+};
+
+const detectFridaOrInjectedLibs = async (): Promise<boolean> => {
+  try {
+    const fridaCheck = await withTimeout(
+      NativeModules?.FridaDetectionModule?.isFridaPresent?.(),
+      "Frida Check"
+    );
+    return !!fridaCheck;
+  } catch (e) {
+    log("Frida detection failed", e);
     return false;
   }
 };
@@ -230,6 +262,9 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
     isNetworkTampered: false,
     isCertificatePinnedValid: true,
     isHardwareTampered: false,
+    isClipboardSuspicious: false,
+    isEnvTampered: false,
+    isFridaDetected: false,
     loading: true,
   });
 
@@ -246,6 +281,8 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
         isNetworkTampered,
         isCertificatePinnedValid,
         isHardwareTampered,
+        isClipboardSuspicious,
+        isFridaDetected,
       ] = await Promise.all([
         checkIfEmulator(),
         checkIfJailBrokenOrRooted(),
@@ -256,9 +293,11 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
         validateCertificatePinning(),
         checkHardwareTampering(),
         checkClipboardForSensitiveData(),
+        detectFridaOrInjectedLibs(),
       ]);
 
       const isHookTampered = detectHookTampering();
+      const isEnvTampered = detectEnvTampering();
 
       if (isMounted) {
         setStatus((prev) => ({
@@ -272,6 +311,9 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
           isNetworkTampered,
           isCertificatePinnedValid,
           isHardwareTampered,
+          isClipboardSuspicious,
+          isEnvTampered,
+          isFridaDetected,
           loading: false,
         }));
       }
@@ -279,15 +321,12 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
 
     performChecks();
 
-    const subscription = AppState.addEventListener(
-      "change",
-      (nextAppState: AppStateStatus) => {
-        setStatus((prev) => ({
-          ...prev,
-          isAppInBackground: nextAppState !== "active",
-        }));
-      }
-    );
+    const subscription = AppState.addEventListener("change", (nextAppState: AppStateStatus) => {
+      setStatus((prev) => ({
+        ...prev,
+        isAppInBackground: nextAppState !== "active",
+      }));
+    });
 
     return () => {
       isMounted = false;
