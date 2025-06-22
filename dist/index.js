@@ -216,15 +216,40 @@ var checkClipboardForSensitiveData = () => __async(null, null, function* () {
     if (!content) return false;
     const suspiciousPatterns = [
       /Bearer\s+[a-zA-Z0-9-_]+\.[a-zA-Z0-9-_]+\.[a-zA-Z0-9-_]+/,
-      // JWT
       /\b4[0-9]{12}(?:[0-9]{3})?\b/,
-      // Visa-like card numbers
       /\b\d{6}\b/
-      // OTP
     ];
-    return suspiciousPatterns.some((regex) => regex.test(content));
+    const isSuspicious = suspiciousPatterns.some(
+      (regex) => regex.test(content)
+    );
+    if (isSuspicious) {
+      Clipboard.setString("");
+    }
+    return isSuspicious;
   } catch (e) {
     log("Clipboard check failed", e);
+    return false;
+  }
+});
+var detectEnvTampering = () => {
+  try {
+    const suspiciousEnvKeys = ["NODE_OPTIONS", "LD_PRELOAD", "__REACT_DEVTOOLS_GLOBAL_HOOK__"];
+    return suspiciousEnvKeys.some((key) => typeof global[key] !== "undefined");
+  } catch (e) {
+    log("Env tampering check failed", e);
+    return false;
+  }
+};
+var detectFridaOrInjectedLibs = () => __async(null, null, function* () {
+  var _a, _b, _c;
+  try {
+    const fridaCheck = yield withTimeout(
+      (_c = (_b = (_a = NativeModules) == null ? void 0 : _a.FridaDetectionModule) == null ? void 0 : _b.isFridaPresent) == null ? void 0 : _c.call(_b),
+      "Frida Check"
+    );
+    return !!fridaCheck;
+  } catch (e) {
+    log("Frida detection failed", e);
     return false;
   }
 });
@@ -240,6 +265,9 @@ var useVaultGuardian = () => {
     isNetworkTampered: false,
     isCertificatePinnedValid: true,
     isHardwareTampered: false,
+    isClipboardSuspicious: false,
+    isEnvTampered: false,
+    isFridaDetected: false,
     loading: true
   });
   useEffect(() => {
@@ -253,7 +281,9 @@ var useVaultGuardian = () => {
         isRuntimeTampered,
         isNetworkTampered,
         isCertificatePinnedValid,
-        isHardwareTampered
+        isHardwareTampered,
+        isClipboardSuspicious,
+        isFridaDetected
       ] = yield Promise.all([
         checkIfEmulator(),
         checkIfJailBrokenOrRooted(),
@@ -263,9 +293,11 @@ var useVaultGuardian = () => {
         checkNetworkTampering(),
         validateCertificatePinning(),
         checkHardwareTampering(),
-        checkClipboardForSensitiveData()
+        checkClipboardForSensitiveData(),
+        detectFridaOrInjectedLibs()
       ]);
       const isHookTampered = detectHookTampering();
+      const isEnvTampered = detectEnvTampering();
       if (isMounted) {
         setStatus((prev) => __spreadProps(__spreadValues({}, prev), {
           isEmulator,
@@ -277,19 +309,19 @@ var useVaultGuardian = () => {
           isNetworkTampered,
           isCertificatePinnedValid,
           isHardwareTampered,
+          isClipboardSuspicious,
+          isEnvTampered,
+          isFridaDetected,
           loading: false
         }));
       }
     });
     performChecks();
-    const subscription = AppState.addEventListener(
-      "change",
-      (nextAppState) => {
-        setStatus((prev) => __spreadProps(__spreadValues({}, prev), {
-          isAppInBackground: nextAppState !== "active"
-        }));
-      }
-    );
+    const subscription = AppState.addEventListener("change", (nextAppState) => {
+      setStatus((prev) => __spreadProps(__spreadValues({}, prev), {
+        isAppInBackground: nextAppState !== "active"
+      }));
+    });
     return () => {
       isMounted = false;
       subscription.remove();
