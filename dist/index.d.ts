@@ -12,7 +12,11 @@ type VaultGuardianStatus = {
     isClipboardSuspicious?: boolean;
     isEnvTampered?: boolean;
     isFridaDetected?: boolean;
-    isSignalTampered?: boolean;
+    isOverlayAttackDetected?: boolean;
+    isScreenBeingRecorded?: boolean;
+    isAppSignatureValid?: boolean;
+    isMockLocationEnabled?: boolean;
+    isMemoryDumped?: boolean;
     loading: boolean;
 };
 declare const useVaultGuardian: () => VaultGuardianStatus;

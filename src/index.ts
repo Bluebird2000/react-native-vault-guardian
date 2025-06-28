@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AppState,
   AppStateStatus,
@@ -22,27 +22,22 @@ type VaultGuardianStatus = {
   isClipboardSuspicious?: boolean;
   isEnvTampered?: boolean;
   isFridaDetected?: boolean;
-  isSignalTampered?: boolean;
+  isOverlayAttackDetected?: boolean;
+  isScreenBeingRecorded?: boolean;
+  isAppSignatureValid?: boolean;
+  isMockLocationEnabled?: boolean;
+  isMemoryDumped?: boolean;
   loading: boolean;
 };
 
 const isAndroid = Platform.OS === "android";
 const isIOS = Platform.OS === "ios";
 const NATIVE_TIMEOUT = 3000;
-const CLIPBOARD_POLL_INTERVAL = 5000; // 5 seconds
 
 LogBox.ignoreLogs(["[VaultGuardian]"]);
 
 const log = (label: string, data: unknown) => {
   if (__DEV__) console.log(`[VaultGuardian] ${label}:`, data);
-};
-
-const logWarn = (label: string, data?: unknown) => {
-  if (__DEV__) console.warn(`[VaultGuardian:WARN] ${label}`, data);
-};
-
-const logError = (label: string, data?: unknown) => {
-  if (__DEV__) console.error(`[VaultGuardian:ERROR] ${label}`, data);
 };
 
 const withTimeout = async <T>(
@@ -60,7 +55,7 @@ const withTimeout = async <T>(
       }),
     ]);
   } catch (error) {
-    logError(`${label} failed`, error);
+    log(`${label} failed`, error);
     return null;
   }
 };
@@ -85,7 +80,7 @@ const checkIfEmulator = async (): Promise<boolean> => {
       return /simulator|x86_64|i386/i.test(model.toLowerCase());
     }
   } catch (e) {
-    logError("Emulator check failed", e);
+    log("Emulator check failed", e);
   }
   return false;
 };
@@ -103,7 +98,7 @@ const checkIfJailBrokenOrRooted = async (): Promise<boolean> => {
 
     return Boolean(rootAccess || jailbreakPaths || suAccess);
   } catch (e) {
-    logError("Root/Jailbreak check failed", e);
+    log("Root/Jailbreak check failed", e);
     return false;
   }
 };
@@ -117,7 +112,7 @@ const checkDebugger = async (): Promise<boolean> => {
     );
     return !!nativeCheck;
   } catch (e) {
-    logError("Debugger check failed", e);
+    log("Debugger check failed", e);
     return false;
   }
 };
@@ -137,14 +132,9 @@ const checkTimeTampering = async (): Promise<boolean> => {
       const delta = Math.abs(now - Number(secureTime));
       return delta > 5 * 60 * 1000;
     }
-
-    // fallback check: monotonic vs system clock delta (simulated)
-    const start = performance.now();
-    await new Promise((res) => setTimeout(res, 100));
-    const delta = performance.now() - start;
-    return delta < 80 || delta > 150;
+    return false;
   } catch (e) {
-    logError("Time tampering check failed", e);
+    log("Time tampering check failed", e);
     return false;
   }
 };
@@ -152,13 +142,14 @@ const checkTimeTampering = async (): Promise<boolean> => {
 const checkRuntimeIntegrity = async (): Promise<boolean> => {
   try {
     const runtimeModule = NativeModules?.RuntimeMonitorModule;
+    if (!runtimeModule?.checkRuntimeIntegrity) return false;
     const nativeCheck = await withTimeout(
-      runtimeModule?.checkRuntimeIntegrity?.(),
+      runtimeModule.checkRuntimeIntegrity(),
       "Runtime Integrity"
     );
     return !!nativeCheck;
   } catch (e) {
-    logError("Runtime integrity check failed", e);
+    log("Runtime integrity check failed", e);
     return false;
   }
 };
@@ -168,46 +159,49 @@ const detectHookTampering = (): boolean => {
     const originalConsoleLog = console.log.toString();
     return !originalConsoleLog.includes("native code");
   } catch (e) {
-    logError("Hook tampering check failed", e);
+    log("Hook tampering check failed", e);
     return false;
   }
 };
 
 const checkNetworkTampering = async (): Promise<boolean> => {
   try {
+    const networkModule = NativeModules?.NetworkTamperModule;
     const result = await withTimeout(
-      NativeModules?.NetworkTamperModule?.detectMITMAttack?.(),
+      networkModule?.detectMITMAttack?.(),
       "Network Tampering"
     );
     return !!result;
   } catch (e) {
-    logError("Network tampering check failed", e);
+    log("Network tampering check failed", e);
     return false;
   }
 };
 
 const validateCertificatePinning = async (): Promise<boolean> => {
   try {
+    const sslModule = NativeModules?.SSLPinningModule;
     const result = await withTimeout(
-      NativeModules?.SSLPinningModule?.validatePinnedCertificate?.(),
+      sslModule?.validatePinnedCertificate?.(),
       "Certificate Pinning"
     );
     return !!result;
   } catch (e) {
-    logError("Cert pinning check failed", e);
+    log("Cert pinning check failed", e);
     return false;
   }
 };
 
 const checkHardwareTampering = async (): Promise<boolean> => {
   try {
+    const hardwareModule = NativeModules?.HardwareModule;
     const result = await withTimeout(
-      NativeModules?.HardwareModule?.isTampered?.(),
+      hardwareModule?.isTampered?.(),
       "Hardware Tampering"
     );
     return !!result;
   } catch (e) {
-    logError("Hardware tampering check failed", e);
+    log("Hardware tampering check failed", e);
     return false;
   }
 };
@@ -227,47 +221,108 @@ const checkClipboardForSensitiveData = async (): Promise<boolean> => {
       regex.test(content)
     );
 
-    if (isSuspicious) Clipboard.setString("");
+    if (isSuspicious) {
+      Clipboard.setString(""); // Clear clipboard
+    }
 
     return isSuspicious;
   } catch (e) {
-    logError("Clipboard check failed", e);
+    log("Clipboard check failed", e);
+    return false;
+  }
+};
+
+const checkOverlayAttack = async (): Promise<boolean> => {
+  try {
+    const result = await withTimeout(
+      NativeModules?.OverlayDetectionModule?.isOverlayActive?.(),
+      "Overlay Attack Check"
+    );
+    return !!result;
+  } catch (e) {
+    log("Overlay check failed", e);
+    return false;
+  }
+};
+
+const checkAppSignature = async (): Promise<boolean> => {
+  try {
+    const result = await withTimeout(
+      NativeModules?.SignatureModule?.isSignatureValid?.(),
+      "App Signature Validation"
+    );
+    return !!result;
+  } catch (e) {
+    log("App signature check failed", e);
+    return false;
+  }
+};
+
+const checkScreenRecording = async (): Promise<boolean> => {
+  try {
+    const result = await withTimeout(
+      NativeModules?.ScreenSecurityModule?.isScreenBeingCaptured?.(),
+      "Screen Recording Check"
+    );
+    return !!result;
+  } catch (e) {
+    log("Screen recording check failed", e);
+    return false;
+  }
+};
+
+const checkMockLocation = async (): Promise<boolean> => {
+  try {
+    const result = await withTimeout(
+      NativeModules?.LocationModule?.isMockLocationEnabled?.(),
+      "Mock Location Check"
+    );
+    return !!result;
+  } catch (e) {
+    log("Mock location check failed", e);
+    return false;
+  }
+};
+
+const detectMemoryDump = async (): Promise<boolean> => {
+  try {
+    const memoryModule = NativeModules?.MemoryCheckModule;
+    const result = await withTimeout(
+      memoryModule?.isMemoryDumped?.(),
+      "Memory Dump Check"
+    );
+    return !!result;
+  } catch (e) {
+    log("Memory dump detection failed", e);
     return false;
   }
 };
 
 const detectEnvTampering = (): boolean => {
   try {
-    const suspiciousEnvKeys = ["NODE_OPTIONS", "LD_PRELOAD", "__REACT_DEVTOOLS_GLOBAL_HOOK__"];
-    return suspiciousEnvKeys.some((key) => typeof (global as any)[key] !== "undefined");
+    const suspiciousEnvKeys = [
+      "NODE_OPTIONS",
+      "LD_PRELOAD",
+      "__REACT_DEVTOOLS_GLOBAL_HOOK__",
+    ];
+    return suspiciousEnvKeys.some(
+      (key) => typeof (global as any)[key] !== "undefined"
+    );
   } catch (e) {
-    logError("Env tampering check failed", e);
+    log("Env tampering check failed", e);
     return false;
   }
 };
 
 const detectFridaOrInjectedLibs = async (): Promise<boolean> => {
   try {
-    const result = await withTimeout(
+    const fridaCheck = await withTimeout(
       NativeModules?.FridaDetectionModule?.isFridaPresent?.(),
       "Frida Check"
     );
-    return !!result;
+    return !!fridaCheck;
   } catch (e) {
-    logError("Frida detection failed", e);
-    return false;
-  }
-};
-
-const detectSignalTampering = async (): Promise<boolean> => {
-  try {
-    const result = await withTimeout(
-      NativeModules?.SignalTamperModule?.isSignalTampered?.(),
-      "Signal Tamper Detection"
-    );
-    return !!result;
-  } catch (e) {
-    logWarn("Signal tamper detection not available", e);
+    log("Frida detection failed", e);
     return false;
   }
 };
@@ -287,11 +342,8 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
     isClipboardSuspicious: false,
     isEnvTampered: false,
     isFridaDetected: false,
-    isSignalTampered: false,
     loading: true,
   });
-
-  const clipboardIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -308,7 +360,11 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
         isHardwareTampered,
         isClipboardSuspicious,
         isFridaDetected,
-        isSignalTampered,
+        isOverlayAttackDetected,
+        isScreenBeingRecorded,
+        isAppSignatureValid,
+        isMockLocationEnabled,
+        isMemoryDumped
       ] = await Promise.all([
         checkIfEmulator(),
         checkIfJailBrokenOrRooted(),
@@ -320,7 +376,11 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
         checkHardwareTampering(),
         checkClipboardForSensitiveData(),
         detectFridaOrInjectedLibs(),
-        detectSignalTampering(),
+        checkOverlayAttack(),
+        checkScreenRecording(),
+        checkAppSignature(),
+        checkMockLocation(),
+        detectMemoryDump(),
       ]);
 
       const isHookTampered = detectHookTampering();
@@ -341,7 +401,11 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
           isClipboardSuspicious,
           isEnvTampered,
           isFridaDetected,
-          isSignalTampered,
+          isOverlayAttackDetected,
+          isScreenBeingRecorded,
+          isAppSignatureValid,
+          isMockLocationEnabled,
+          isMemoryDumped,
           loading: false,
         }));
       }
@@ -349,24 +413,19 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
 
     performChecks();
 
-    const appStateSubscription = AppState.addEventListener("change", (nextAppState: AppStateStatus) => {
-      setStatus((prev) => ({
-        ...prev,
-        isAppInBackground: nextAppState !== "active",
-      }));
-    });
-
-    clipboardIntervalRef.current = setInterval(async () => {
-      const suspicious = await checkClipboardForSensitiveData();
-      if (suspicious) {
-        setStatus((prev) => ({ ...prev, isClipboardSuspicious: true }));
+    const subscription = AppState.addEventListener(
+      "change",
+      (nextAppState: AppStateStatus) => {
+        setStatus((prev) => ({
+          ...prev,
+          isAppInBackground: nextAppState !== "active",
+        }));
       }
-    }, CLIPBOARD_POLL_INTERVAL);
+    );
 
     return () => {
       isMounted = false;
-      appStateSubscription.remove();
-      if (clipboardIntervalRef.current) clearInterval(clipboardIntervalRef.current);
+      subscription.remove();
     };
   }, []);
 
