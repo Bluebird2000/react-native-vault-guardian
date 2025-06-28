@@ -26,7 +26,7 @@ type VaultGuardianStatus = {
   isScreenBeingRecorded?: boolean;
   isAppSignatureValid?: boolean;
   isMockLocationEnabled?: boolean;
-
+  isMemoryDumped?: boolean;
   loading: boolean;
 };
 
@@ -284,6 +284,20 @@ const checkMockLocation = async (): Promise<boolean> => {
   }
 };
 
+const detectMemoryDump = async (): Promise<boolean> => {
+  try {
+    const memoryModule = NativeModules?.MemoryCheckModule;
+    const result = await withTimeout(
+      memoryModule?.isMemoryDumped?.(),
+      "Memory Dump Check"
+    );
+    return !!result;
+  } catch (e) {
+    log("Memory dump detection failed", e);
+    return false;
+  }
+};
+
 const detectEnvTampering = (): boolean => {
   try {
     const suspiciousEnvKeys = [
@@ -350,6 +364,7 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
         isScreenBeingRecorded,
         isAppSignatureValid,
         isMockLocationEnabled,
+        isMemoryDumped
       ] = await Promise.all([
         checkIfEmulator(),
         checkIfJailBrokenOrRooted(),
@@ -365,6 +380,7 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
         checkScreenRecording(),
         checkAppSignature(),
         checkMockLocation(),
+        detectMemoryDump(),
       ]);
 
       const isHookTampered = detectHookTampering();
@@ -389,6 +405,7 @@ export const useVaultGuardian = (): VaultGuardianStatus => {
           isScreenBeingRecorded,
           isAppSignatureValid,
           isMockLocationEnabled,
+          isMemoryDumped,
           loading: false,
         }));
       }
